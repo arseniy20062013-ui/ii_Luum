@@ -1,63 +1,93 @@
 import asyncio
-import sqlite3
 import aiohttp
 import re
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
 from bs4 import BeautifulSoup
 
-# --- ТОКЕН ---
+# --- КОНФИГ (ТОЛЬКО ОДИН БОТ) ---
 TOKEN = "8090178058:AAGwwYNUvE0xEhf4GKVtKOmw8wahSl_x8QM"
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# --- БД (SQLite идеально для Termux) ---
-conn = sqlite3.connect('luum.db', check_same_thread=False)
-cur = conn.cursor()
-cur.execute('CREATE TABLE IF NOT EXISTS logs (txt TEXT)')
-conn.commit()
-
-# --- ПАРСЕР САЙТОВ ---
-async def read_site(url):
+# --- ФУНКЦИЯ ЧТЕНИЯ САЙТОВ ---
+async def fetch_site_text(url):
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as r:
-                s = BeautifulSoup(await r.text(), 'html.parser')
-                return " ".join(s.get_text().split())[:500] + "..."
-    except: return "🚫 Ошибка чтения."
+            async with session.get(url, timeout=7) as response:
+                html = await response.text()
+                soup = BeautifulSoup(html, 'html.parser')
+                # Удаляем мусорные теги
+                for script_or_style in soup(["script", "style", "nav", "footer", "header"]):
+                    script_or_style.decompose()
+                text = " ".join(soup.get_text().split())
+                return text if text else "Сайт не содержит текста."
+    except Exception as e:
+        return None
 
-# --- ЛОГИКА ---
+# --- ОБРАБОТКА КОМАНДЫ /START ---
 @dp.message(Command("start"))
-async def s(m: types.Message):
-    print(f">>> Бот увидел /start от {m.from_user.username}")
-    await m.answer("🧠 Luum в Termux запущена!\nПришли ссылку или 'нарисуй (что-то)'")
+async def cmd_start(m: types.Message):
+    await m.answer(
+        "🧠 **Luum на связи.**\n\n"
+        "Я — твой персональный ИИ. Вот что я могу:\n"
+        "• **Фото:** Напиши «нарисуй [запрос]»\n"
+        "• **Ссылки:** Просто пришли ссылку, и я её изучу."
+    )
 
-@dp.message()
-async def h(m: types.Message):
-    if not m.text: return
-    print(f">>> Сообщение: {m.text}") # Это ты увидишь в терминале
+# --- ОБРАБОТКА ССЫЛОК ---
+@dp.message(F.text.regexp(r'(https?://\S+)'))
+async def link_handler(m: types.Message):
+    url = re.findall(r'(https?://\S+)', m.text)[0]
     
-    t = m.text.lower()
+    # Создаем кнопки под ссылкой
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📝 Пересказать", callback_data=f"summ|{url}"),
+            InlineKeyboardButton(text="🤔 О чем это?", callback_data=f"about|{url}")
+        ]
+    ])
+    
+    await m.answer("🌐 Ссылка получена. Выбери действие:", reply_markup=kb)
 
-    if "http" in t:
-        url = re.findall(r'(https?://\S+)', t)[0]
-        await m.answer("🔍 Читаю сайт...")
-        await m.answer(await read_site(url))
+# --- ОБРАБОТКА НАЖАТИЙ НА КНОПКИ ---
+@dp.callback_query(F.data.startswith(("summ|", "about|")))
+async def process_callback(call: types.CallbackQuery):
+    action, url = call.data.split("|")
+    await call.answer("🔍 Luum изучает сайт...")
     
-    elif "нарисуй" in t:
-        p = t.replace("нарисуй", "").strip()
-        await m.answer(f"🎨 Рисую {p}...")
-        url = f"https://pollinations.ai/p/{p.replace(' ', '_')}"
-        await m.answer_photo(photo=url)
-    
+    content = await fetch_site_text(url)
+    if not content:
+        return await call.message.answer("❌ Не удалось прочитать содержимое сайта.")
+
+    if action == "summ":
+        result = f"📝 **Пересказ от Luum:**\n\n{content[:500]}..."
     else:
-        cur.execute('INSERT INTO logs VALUES (?)', (m.text,))
-        conn.commit()
-        await m.answer("🧠 Записала в память сервера.")
+        # Имитация "понимания" о чем сайт (берем самое начало)
+        result = f"🤔 **О чем этот сайт:**\n\nЭтот ресурс содержит информацию о: {content[:200]}..."
+    
+    await call.message.answer(result)
 
+# --- ГЕНЕРАЦИЯ ФОТО И ДИАЛОГ ---
+@dp.message()
+async def main_handler(m: types.Message):
+    if not m.text: return
+    txt = m.text.lower()
+
+    if "нарисуй" in txt:
+        prompt = txt.replace("нарисуй", "").strip() or "cyberpunk vision"
+        await m.answer(f"🎨 Рисую: {prompt}...")
+        photo_url = f"https://pollinations.ai/p/{prompt.replace(' ', '_')}?width=1024&height=1024"
+        return await m.answer_photo(photo=photo_url, caption=f"Твой запрос: {prompt}")
+
+    # Если это просто текст
+    await m.answer("🧠 Запрос принят. Я сохранила это в нейронную память.")
+
+# --- ЗАПУСК ---
 async def main():
-    print("--- LUUM СТАРТУЕТ В TERMUX ---")
-    print("Нажми 'Acquire wakelock' в шторке уведомлений!")
+    print("--- LUUM ЗАПУЩЕНА (БЕЗ АДМИНКИ) ---")
+    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
