@@ -4,77 +4,82 @@ import re
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import Command
+
+# Для парсинга сайтов
 from bs4 import BeautifulSoup
 
-# --- КОНФИГ ---
 TOKEN = "8090178058:AAGwwYNUvE0xEhf4GKVtKOmw8wahSl_x8QM"
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# --- ПАРСЕР САЙТОВ ---
-async def fetch_site(url):
+# Оперативная память чата (очистится при перезагрузке бота)
+chat_context = {}
+
+async def get_site_data(url):
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=7) as response:
-                soup = BeautifulSoup(await response.text(), 'html.parser')
-                for s in soup(["script", "style", "nav", "footer"]): s.decompose()
-                text = " ".join(soup.get_text().split())
-                return text if text else "Текст не найден."
+            async with session.get(url, timeout=5) as resp:
+                soup = BeautifulSoup(await resp.text(), 'html.parser')
+                for s in soup(["script", "style"]): s.decompose()
+                return " ".join(soup.get_text().split())
     except: return None
 
-# --- КОМАНДА СТАРТ ---
 @dp.message(Command("start"))
-async def cmd_start(m: types.Message):
+async def start(m: types.Message):
     await m.answer(
-        "🧠 **Luum на связи.**\n\n"
-        "• Пришли ссылку — я её изучу.\n"
-        "• Напиши **'нарисуй [запрос]'** — я создам фото."
+        "🧠 **Luum ИИ активна**\n\n"
+        "• Пиши: **нарисуй [запрос]** для фото\n"
+        "• Кидай **ссылку** для анализа\n"
+        "• Я помню контекст нашей беседы!"
     )
 
-# --- ОБРАБОТКА ССЫЛОК (Кнопки) ---
 @dp.message(F.text.regexp(r'(https?://\S+)'))
-async def link_handler(m: types.Message):
+async def link(m: types.Message):
     url = re.findall(r'(https?://\S+)', m.text)[0]
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📝 Пересказать", callback_data=f"summ|{url}"),
-            InlineKeyboardButton(text="🤔 О чем это?", callback_data=f"about|{url}")
+            InlineKeyboardButton(text="📝 Пересказать", callback_data=f"sm|{url}"),
+            InlineKeyboardButton(text="🤔 О чем сайт?", callback_data=f"ab|{url}")
         ]
     ])
-    await m.answer("🌐 Ссылка получена. Что сделать?", reply_markup=kb)
+    await m.answer("🌐 Ссылка поймана. Что сделать?", reply_markup=kb)
 
-# --- ЛОГИКА КНОПОК ---
-@dp.callback_query(F.data.startswith(("summ|", "about|")))
-async def callbacks(call: types.CallbackQuery):
-    action, url = call.data.split("|")
-    await call.answer("🔍 Luum думает...")
-    content = await fetch_site(url)
+@dp.callback_query(F.data.startswith(("sm|", "ab|")))
+async def call_link(c: types.CallbackQuery):
+    act, url = c.data.split("|")
+    await c.answer("Читаю...")
+    text = await get_site_data(url)
+    if not text: return await c.message.answer("❌ Ошибка доступа.")
     
-    if not content:
-        return await call.message.answer("❌ Ошибка чтения.")
+    res = f"📝 **Пересказ:**\n{text[:500]}..." if act == "sm" else f"🤔 **Суть:**\n{text[:250]}..."
+    await c.message.answer(res)
 
-    if action == "summ":
-        await call.message.answer(f"📝 **Пересказ:**\n{content[:500]}...")
-    else:
-        await call.message.answer(f"🤔 **Суть сайта:**\n{content[:250]}...")
-
-# --- ГЕНЕРАЦИЯ ФОТО И ТЕКСТ ---
 @dp.message()
-async def main_logic(m: types.Message):
+async def talk(m: types.Message):
     if not m.text: return
+    uid = m.from_user.id
     txt = m.text.lower()
 
+    if uid not in chat_context: chat_context[uid] = []
+
+    # Генерация фото
     if "нарисуй" in txt:
-        p = txt.replace("нарисуй", "").strip() or "art"
-        await m.answer(f"🎨 Рисую: {p}...")
-        url = f"https://pollinations.ai/p/{p.replace(' ', '_')}?width=1024&height=1024"
-        return await m.answer_photo(photo=url, caption=f"Запрос: {p}")
+        p = txt.replace("нарисуй", "").strip() or "space"
+        await m.answer("🎨 Генерирую...")
+        return await m.answer_photo(photo=f"https://pollinations.ai/p/{p.replace(' ', '_')}")
 
-    await m.answer("🧠 Запрос принят и сохранен в память.")
+    # Запоминание контекста
+    chat_context[uid].append(m.text)
+    if len(chat_context[uid]) > 15: chat_context[uid].pop(0)
 
-# --- ЗАПУСК ---
+    # Команда на проверку памяти
+    if "вспомни" in txt or "что я писал" in txt:
+        history = "\n- ".join(chat_context[uid][-5:])
+        return await m.answer(f"🧠 Твои последние мысли:\n- {history}")
+
+    await m.answer("🧠 Поняла. Добавила в текущий контекст.")
+
 async def main():
-    print("🚀 Luum запущена (3GB RAM / 40% CPU)")
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
