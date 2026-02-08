@@ -1,0 +1,5 @@
+torch
+aiogram==2.25.1
+aiohttp
+beautifulsoup4
+requests
