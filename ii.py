@@ -7,98 +7,101 @@ from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from bs4 import BeautifulSoup
 
-# --- НАСТРОЙКИ ---
+# КОНФИГ
 TOKEN = "8090178058:AAGwwYNUvE0xEhf4GKVtKOmw8wahSl_x8QM"
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Файл, где хранится интеллект Luum
+# Файл базы знаний
 BRAIN_STORAGE = "luum_knowledge.txt"
 
-# --- ЛОГИКА ОБУЧЕНИЯ И МЫШЛЕНИЯ ---
+# ЛОГИКА МЫШЛЕНИЯ
 def train_and_generate(text_input):
-    # Сохраняем новые знания
-    with open(BRAIN_STORAGE, "a", encoding="utf-8") as f:
-        f.write(text_input + ". ")
+    # Очистка текста и запись в базу
+    clean_input = text_input.replace("\n", " ").strip()
+    if len(clean_input) > 2:
+        with open(BRAIN_STORAGE, "a", encoding="utf-8") as f:
+            f.write(clean_input + ". ")
     
-    # Читаем накопленный опыт
     with open(BRAIN_STORAGE, "r", encoding="utf-8") as f:
-        knowledge_base = f.read()
+        knowledge = f.read()
     
-    # Если база слишком маленькая (меньше 3-4 предложений), ИИ не сможет составить фразу
-    if len(knowledge_base.split()) < 10:
-        return "Я собираю данные... Мне нужно больше твоих мыслей, чтобы заговорить."
+    if len(knowledge.split()) < 15:
+        return "Я только активировалась и пока изучаю твой стиль общения. Напиши мне еще что-нибудь."
 
     try:
-        # Создаем модель на основе накопленных данных
-        # state_size=2 делает речь более связной
-        model = markovify.Text(knowledge_base, state_size=2)
-        
-        # Генерируем уникальное предложение
+        # Модель с state_size=2 для более качественной речи
+        model = markovify.Text(knowledge, state_size=2)
         response = model.make_sentence(tries=100)
         
-        return response if response else "Мои нейроны связываются... Продолжай общение."
+        # Если не удалось собрать длинное предложение, пробуем короткое
+        if not response:
+            model = markovify.Text(knowledge, state_size=1)
+            response = model.make_sentence(tries=50)
+            
+        return response if response else "Интересная мысль. Расскажи об этом подробнее?"
     except:
-        return "Произошла перестройка нейронной сети. Повтори запрос."
+        return "Мои нейронные связи перестраиваются. Давай продолжим диалог."
 
-# --- ПАРСЕР ДЛЯ ОБУЧЕНИЯ НА САЙТАХ ---
+# ПАРСЕР САЙТОВ ДЛЯ ОБУЧЕНИЯ
 async def learn_from_site(url):
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=10) as resp:
                 soup = BeautifulSoup(await resp.text(), 'html.parser')
-                # Выкачиваем чистый текст из статей
-                for tag in soup(["script", "style", "nav", "footer"]): tag.decompose()
+                for tag in soup(["script", "style", "nav", "footer", "header"]):
+                    tag.decompose()
                 clean_text = " ".join(soup.get_text().split())
-                return clean_text[:2000] # Берем приличный кусок для обучения
+                return clean_text[:3000]
     except:
         return None
 
-# --- ОБРАБОТЧИКИ ---
+# ОБРАБОТЧИКИ
 
 @dp.message(Command("start"))
 async def cmd_start(m: types.Message):
     await m.answer(
-        "🧠 **Luum: Система локального ИИ запущена.**\n\n"
-        "Я работаю без внешних генераторов. Мой разум строится только на твоих словах.\n\n"
-        "• Пиши мне что угодно — я учусь.\n"
-        "• Присылай ссылки — я заберу знания оттуда."
+        "Привет! Я Luum — твоя персональная нейросеть.\n\n"
+        "Я работаю автономно на этом сервере. У меня нет заготовленных фраз: "
+        "я учусь прямо сейчас на твоих сообщениях. Чем больше мы общаемся, "
+        "тем лучше я буду тебя понимать.\n\n"
+        "Просто напиши мне что-нибудь или пришли ссылку на интересную статью."
     )
 
 @dp.message(F.text.regexp(r'(https?://\S+)'))
 async def handle_link(m: types.Message):
     url = re.findall(r'(https?://\S+)', m.text)[0]
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🧠 Поглотить знания сайта", callback_data=f"learn|{url}")]
+        [InlineKeyboardButton(text="Изучить содержимое", callback_data=f"learn|{url}")]
     ])
-    await m.answer("🌐 Вижу источник информации. Позволишь мне изучить его?", reply_markup=kb)
+    await m.answer("Вижу ссылку. Позволишь мне прочитать этот ресурс и обучиться?", reply_markup=kb)
 
 @dp.callback_query(F.data.startswith("learn|"))
 async def process_learning(c: types.CallbackQuery):
     url = c.data.split("|")[1]
-    await c.answer("Изучаю контент...")
+    await c.answer("Сканирую текст...")
     
     site_data = await learn_from_site(url)
     if site_data:
-        # Luum обучается на тексте сайта
+        # Luum забирает текст сайта в свою базу
         reply = train_and_generate(site_data)
-        await c.message.answer(f"✅ Знания получены. Вот мой вывод на основе новой инфо:\n\n{reply}")
+        await c.message.answer(f"Я изучила материал. Вот что я думаю по этому поводу:\n\n{reply}")
     else:
-        await c.message.answer("❌ Не удалось дотянуться до данных.")
+        await c.message.answer("Не удалось получить данные по ссылке.")
 
 @dp.message()
 async def chat_handler(m: types.Message):
     if not m.text: return
     
-    # Обучаемся на сообщении пользователя и генерируем ответ
+    # Обучение и ответ
     response = train_and_generate(m.text)
     await m.answer(response)
 
-# --- ЗАПУСК ---
+# ЗАПУСК
 async def main():
-    # Создаем базу знаний, если её нет
+    # Проверка наличия файла базы
     open(BRAIN_STORAGE, "a").close()
-    print("🤖 Luum готова к обучению. Админка и фото отключены.")
+    print("Luum запущена в режиме чистого интеллекта.")
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
